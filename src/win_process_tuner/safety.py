@@ -1,6 +1,7 @@
 """Guardrails for process mutations."""
 
 import ctypes
+import ntpath
 import os
 
 import psutil
@@ -68,4 +69,38 @@ def check_target(pid, process=None):
         raise SafetyError(
             f"Refusing to tune PID {pid} ({name}): it is a critical system process."
         )
+    try:
+        username = proc.username()
+    except psutil.AccessDenied:
+        raise SafetyError(f"Refusing to tune PID {pid}: cannot verify process owner.")
+    if not isinstance(username, str):
+        raise SafetyError(f"Refusing to tune PID {pid}: cannot verify process owner.")
+    folded_username = username.casefold()
+    system_account = folded_username.startswith(("nt authority\\", "nt service\\"))
+    system_account = system_account or folded_username in {
+        "system",
+        "local service",
+        "network service",
+    }
+    if system_account:
+        raise SafetyError(
+            f"Refusing to tune PID {pid} ({name or 'unknown'}): it is system-owned."
+        )
+    windows_dir = os.environ.get("WINDIR") or os.environ.get("SystemRoot")
+    try:
+        executable = proc.exe()
+    except psutil.AccessDenied:
+        raise SafetyError(f"Refusing to tune PID {pid}: cannot verify executable location.")
+    if not isinstance(executable, str):
+        raise SafetyError(f"Refusing to tune PID {pid}: cannot verify executable location.")
+    if windows_dir:
+        try:
+            if ntpath.commonpath(
+                [ntpath.normcase(executable), ntpath.normcase(windows_dir)]
+            ) == ntpath.normcase(windows_dir):
+                raise SafetyError(
+                    f"Refusing to tune PID {pid} ({name or 'unknown'}): it runs from the Windows directory."
+                )
+        except ValueError:
+            pass
     return proc

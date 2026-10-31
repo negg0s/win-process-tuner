@@ -100,3 +100,81 @@ def test_restore_state_refuses_protected_pid():
 def test_load_snapshot_rejects_missing_file(tmp_path):
     with pytest.raises(OSError):
         state_mod.load_snapshot(str(tmp_path / "missing.json"))
+
+
+def test_capture_game_state_records_process_identity_and_priority():
+    proc = _make_proc()
+    proc.create_time.return_value = 1234.5
+    with patch.object(state_mod, "check_target", return_value=proc):
+        data = state_mod.capture_game_state(42)
+    assert data == {
+        "version": 1,
+        "pid": 42,
+        "name": "game.exe",
+        "create_time": 1234.5,
+        "priority_value": psutil.HIGH_PRIORITY_CLASS,
+    }
+
+
+def test_restore_game_state_refuses_reused_pid():
+    proc = _make_proc()
+    proc.create_time.return_value = 9999.0
+    saved = {
+        "version": 1,
+        "pid": 42,
+        "name": "game.exe",
+        "create_time": 1234.5,
+        "priority_value": psutil.NORMAL_PRIORITY_CLASS,
+    }
+    with patch.object(state_mod, "check_target", return_value=proc):
+        with pytest.raises(ValueError, match="different process"):
+            state_mod.restore_game_state(saved)
+
+
+def test_restore_game_state_restores_only_saved_priority():
+    proc = _make_proc()
+    proc.create_time.return_value = 1234.5
+    saved = {
+        "version": 1,
+        "pid": 42,
+        "name": "game.exe",
+        "create_time": 1234.5,
+        "priority_value": psutil.NORMAL_PRIORITY_CLASS,
+    }
+    with patch.object(state_mod, "check_target", return_value=proc) as target:
+        result = state_mod.restore_game_state(saved)
+    target.assert_called_once_with(42)
+    assert proc.nice.call_args_list[-1].args == (psutil.NORMAL_PRIORITY_CLASS,)
+    assert result["priority"]["new"] == 32
+
+
+def test_apply_game_priority_uses_captured_process_identity():
+    proc = _make_proc()
+    proc.create_time.return_value = 1234.5
+    saved = {
+        "version": 1,
+        "pid": 42,
+        "name": "game.exe",
+        "create_time": 1234.5,
+        "priority_value": psutil.NORMAL_PRIORITY_CLASS,
+    }
+    with patch.object(state_mod, "check_target", return_value=proc):
+        result = state_mod.apply_game_priority(saved)
+    assert proc.nice.call_args_list[-1].args == (psutil.ABOVE_NORMAL_PRIORITY_CLASS,)
+    assert result["applied"] is True
+
+
+def test_apply_game_priority_refuses_pid_reuse():
+    proc = _make_proc()
+    proc.create_time.return_value = 9999.0
+    saved = {
+        "version": 1,
+        "pid": 42,
+        "name": "game.exe",
+        "create_time": 1234.5,
+        "priority_value": psutil.NORMAL_PRIORITY_CLASS,
+    }
+    with patch.object(state_mod, "check_target", return_value=proc):
+        with pytest.raises(ValueError, match="different process"):
+            state_mod.apply_game_priority(saved)
+    proc.nice.assert_not_called()

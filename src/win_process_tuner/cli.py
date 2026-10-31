@@ -1,6 +1,7 @@
 """Command-line interface for win-process-tuner."""
 
 import json
+import os
 import sys
 
 import click
@@ -17,8 +18,20 @@ from .processes import (
     set_priority,
 )
 from .profile import apply_gaming_profile, physical_core_cpus
-from .safety import SafetyError, elevation_hint, is_admin
-from .state import capture_state, load_snapshot, restore_state, write_snapshot
+from .safety import CRITICAL_NAMES, PROTECTED_PIDS, SafetyError, check_target, elevation_hint, is_admin
+from .state import (
+    apply_game_priority,
+    capture_game_state,
+    capture_state,
+    game_snapshot_path,
+    load_game_snapshot,
+    load_snapshot,
+    remove_game_snapshot,
+    restore_game_state,
+    restore_state,
+    write_game_snapshot,
+    write_snapshot,
+)
 from .timer import apply_timer_resolution
 
 
@@ -290,6 +303,116 @@ def doctor_cmd():
     for name, ok, detail in checks:
         status = "OK" if ok else "FAIL"
         click.echo(f"{name:16} {status:5} {detail}")
+
+
+@cli.command("game")
+@click.option("--dry-run", is_flag=True, help="Preview only. Do not save or change anything.")
+@click.option("--name", "game_name", help="Filter by part of the game process name.")
+def game_cmd(dry_run, game_name):
+    """Choose a running game process and safely raise its priority one step."""
+    snapshot_path = game_snapshot_path()
+    if not dry_run and os.path.exists(snapshot_path):
+        click.echo("An undo is already saved. Run 'win-process-tuner undo' before tuning another process.", err=True)
+        sys.exit(1)
+    try:
+        rows = list_processes(top=None, sort="cpu")
+    except Exception as exc:
+        _fail(exc)
+    safe_processes = []
+    for row in rows:
+        if (
+            row.get("denied")
+            or not row.get("name")
+            or row["name"].lower() in CRITICAL_NAMES
+            or row["pid"] in PROTECTED_PIDS
+        ):
+            continue
+        try:
+            check_target(row["pid"])
+        except Exception:
+            continue
+        safe_processes.append(row)
+
+    if game_name is None:
+        game_name = click.prompt("Part of the game's process name", type=str).strip()
+    if not game_name:
+        click.echo("Enter part of the game process name and try again.")
+        return
+    choices = [row for row in safe_processes if game_name.casefold() in row["name"].casefold()]
+    choices = choices[:40]
+    if not choices:
+        click.echo("No safe process matched. Check the name in Task Manager's Details tab and try again.")
+        return
+
+    click.echo("Choose the game process, not its launcher:")
+    for index, row in enumerate(choices, start=1):
+        click.echo(f"  {index}. {row['name']} (PID {row['pid']})")
+    selected = click.prompt("Process number", type=click.IntRange(1, len(choices)))
+    target = choices[selected - 1]
+
+    try:
+        check_target(target["pid"])
+        saved_state = capture_game_state(target["pid"])
+    except Exception as exc:
+        _fail(exc)
+    current_level = next(
+        (name for name, value in PRIORITY_LEVELS.items() if value == saved_state["priority_value"]),
+        str(saved_state["priority_value"]),
+    )
+    if current_level not in {"normal", "below-normal", "idle"}:
+        click.echo(f"Current priority is {current_level}, already above normal. No change was made.")
+        return
+    click.echo(f"\nPreview for {saved_state['name']} (PID {saved_state['pid']}):")
+    click.echo(f"  Priority: {current_level} -> Above normal")
+    click.echo("  CPU affinity, timer settings, and other processes: unchanged")
+    if dry_run:
+        click.echo("Preview only. Nothing was changed.")
+        return
+
+    if not click.confirm("Apply this priority change?", default=False):
+        click.echo("Cancelled. Nothing was changed.")
+        return
+    try:
+        write_game_snapshot(saved_state, snapshot_path)
+        apply_game_priority(saved_state)
+    except Exception as exc:
+        if os.path.exists(snapshot_path):
+            click.echo("The undo file is available. Run 'win-process-tuner undo' if the change took effect.")
+        _fail(exc)
+    click.echo("Applied. Original priority saved for undo.")
+    click.echo("To restore it later, run: win-process-tuner undo")
+
+
+@cli.command("undo")
+def undo_cmd():
+    """Restore the priority saved by the last successful game command."""
+    snapshot_path = game_snapshot_path()
+    try:
+        saved_state = load_game_snapshot(snapshot_path)
+    except FileNotFoundError:
+        click.echo("No game change is saved to undo.", err=True)
+        sys.exit(1)
+    except Exception as exc:
+        _fail(exc)
+    try:
+        result = restore_game_state(saved_state)
+    except psutil.NoSuchProcess:
+        remove_game_snapshot(snapshot_path)
+        click.echo("The game process has exited. Its priority is gone, so the undo file was cleared.")
+        return
+    except ValueError as exc:
+        if "different process" in str(exc):
+            remove_game_snapshot(snapshot_path)
+            click.echo("The original game process has exited. No other process was changed; undo file cleared.")
+            return
+        _fail(exc)
+    except Exception as exc:
+        _fail(exc)
+    try:
+        remove_game_snapshot(snapshot_path)
+    except Exception as exc:
+        _fail(exc)
+    click.echo(f"PID {result['pid']} priority restored. Undo file removed.")
 
 
 if __name__ == "__main__":

@@ -86,6 +86,99 @@ def restore_state(pid, state, dry_run=False):
     }
 
 
+def capture_game_state(pid):
+    """Capture only the priority and identity needed by the beginner game flow."""
+    proc = check_target(pid)
+    with proc.oneshot():
+        return {
+            "version": SNAPSHOT_VERSION,
+            "pid": proc.pid,
+            "name": proc.name(),
+            "create_time": proc.create_time(),
+            "priority_value": proc.nice(),
+        }
+
+
+def validate_game_snapshot(data):
+    if not isinstance(data, dict):
+        raise ValueError("Game undo file must be a JSON object")
+    if data.get("version") != SNAPSHOT_VERSION:
+        raise ValueError("Unsupported game undo file version")
+    if not isinstance(data.get("pid"), int) or data["pid"] <= 0:
+        raise ValueError("Game undo file has an invalid pid")
+    if not isinstance(data.get("name"), str) or not data["name"]:
+        raise ValueError("Game undo file has an invalid process name")
+    if not isinstance(data.get("create_time"), (int, float)):
+        raise ValueError("Game undo file has an invalid process start time")
+    if data.get("priority_value") not in PRIORITY_LEVELS.values():
+        raise ValueError("Game undo file has an invalid priority")
+    return data
+
+
+def load_game_snapshot(path):
+    with open(path, "r", encoding="utf-8") as handle:
+        return validate_game_snapshot(json.load(handle))
+
+
+def write_game_snapshot(state, path):
+    validate_game_snapshot(state)
+    write_snapshot(state, path)
+
+
+def apply_game_priority(state):
+    """Raise priority only if the target still matches the captured process."""
+    validate_game_snapshot(state)
+    proc = check_target(state["pid"])
+    if (
+        proc.name().lower() != state["name"].lower()
+        or proc.create_time() != state["create_time"]
+    ):
+        raise ValueError("PID now belongs to a different process. Refusing to apply.")
+    current = proc.nice()
+    new = PRIORITY_LEVELS["above-normal"]
+    proc.nice(new)
+    return {
+        "pid": state["pid"],
+        "current": current,
+        "new": new,
+        "applied": True,
+    }
+
+
+def restore_game_state(state):
+    """Restore priority only if the PID still identifies the captured process."""
+    validate_game_snapshot(state)
+    proc = check_target(state["pid"])
+    if (
+        proc.name().lower() != state["name"].lower()
+        or proc.create_time() != state["create_time"]
+    ):
+        raise ValueError("PID now belongs to a different process. Refusing to restore.")
+    current = proc.nice()
+    new = state["priority_value"]
+    proc.nice(new)
+    priority_result = {
+        "pid": state["pid"],
+        "current": current,
+        "new": new,
+        "dry_run": False,
+        "applied": True,
+    }
+    return {"pid": state["pid"], "priority": priority_result, "applied": True}
+
+
+def game_snapshot_path():
+    """Return the per-user location for the one-step game undo file."""
+    base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".win-process-tuner")
+    if os.environ.get("LOCALAPPDATA"):
+        base = os.path.join(base, "win-process-tuner")
+    return os.path.join(base, "game-undo.json")
+
+
+def remove_game_snapshot(path):
+    os.remove(path)
+
+
 def snapshot_path(pid, directory=None):
     base = directory or os.getcwd()
     return os.path.join(base, f"wpt-{pid}.json")

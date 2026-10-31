@@ -19,6 +19,154 @@ def test_help():
     assert "timer-resolution" in result.output
 
 
+def test_game_shows_safe_preview_before_confirming_apply():
+    rows = [
+        {"pid": 321, "name": "ExampleGame.exe", "cpu": 0.0, "memory": 100, "status": "running", "denied": False}
+    ]
+    with patch("win_process_tuner.cli.list_processes", return_value=rows):
+        with patch("win_process_tuner.cli.check_target"):
+            with patch(
+                "win_process_tuner.cli.capture_game_state",
+                return_value={"pid": 321, "name": "ExampleGame.exe", "priority_value": 32},
+            ):
+                with patch("win_process_tuner.cli.write_game_snapshot") as write_snapshot:
+                    with patch("win_process_tuner.cli.apply_game_priority", return_value={"pid": 321}):
+                        result = CliRunner().invoke(
+                            cli_mod.cli, ["game"], input="ExampleGame\n1\ny\n"
+                        )
+    assert result.exit_code == 0
+    assert "ExampleGame.exe" in result.output
+    assert "Above normal" in result.output
+    assert "undo" in result.output.lower()
+    write_snapshot.assert_called_once()
+
+
+def test_game_preview_does_not_save_or_change_process():
+    rows = [
+        {"pid": 321, "name": "ExampleGame.exe", "cpu": 0.0, "memory": 100, "status": "running", "denied": False}
+    ]
+    with patch("win_process_tuner.cli.list_processes", return_value=rows):
+        with patch("win_process_tuner.cli.check_target"):
+            with patch(
+                "win_process_tuner.cli.capture_game_state",
+                return_value={"pid": 321, "name": "ExampleGame.exe", "priority_value": 32},
+            ):
+                with patch("win_process_tuner.cli.write_game_snapshot") as save:
+                    with patch("win_process_tuner.cli.apply_game_priority") as set_prio:
+                        result = CliRunner().invoke(
+                            cli_mod.cli, ["game", "--dry-run"], input="ExampleGame\n1\n"
+                        )
+    assert result.exit_code == 0
+    assert "Above normal" in result.output
+    save.assert_not_called()
+    set_prio.assert_not_called()
+
+
+def test_game_menu_excludes_processes_rejected_by_safety_check():
+    rows = [
+        {"pid": 321, "name": "ExampleGame.exe", "denied": False},
+        {"pid": 322, "name": "svchost.exe", "denied": False},
+    ]
+    with patch("win_process_tuner.cli.list_processes", return_value=rows):
+        with patch("win_process_tuner.cli.check_target") as check:
+            check.side_effect = [None, SafetyError("system-owned"), None]
+            with patch(
+                "win_process_tuner.cli.capture_game_state",
+                return_value={"pid": 321, "name": "ExampleGame.exe", "priority_value": 32},
+            ):
+                result = CliRunner().invoke(
+                    cli_mod.cli, ["game", "--dry-run"], input="ExampleGame\n1\n"
+                )
+    assert result.exit_code == 0
+    assert "ExampleGame.exe" in result.output
+    assert "svchost.exe" not in result.output
+
+
+def test_game_filters_process_menu_by_game_name():
+    rows = [
+        {"pid": 321, "name": "ExampleGame.exe", "denied": False},
+        {"pid": 322, "name": "Browser.exe", "denied": False},
+    ]
+    with patch("win_process_tuner.cli.list_processes", return_value=rows):
+        with patch("win_process_tuner.cli.check_target"):
+            with patch(
+                "win_process_tuner.cli.capture_game_state",
+                return_value={"pid": 321, "name": "ExampleGame.exe", "priority_value": 32},
+            ):
+                result = CliRunner().invoke(
+                    cli_mod.cli, ["game", "--dry-run"], input="ExampleGame\n1\n"
+                )
+    assert result.exit_code == 0
+    assert "ExampleGame.exe" in result.output
+    assert "Browser.exe" not in result.output
+
+
+def test_game_does_not_lower_priority_that_is_already_above_normal():
+    rows = [{"pid": 321, "name": "ExampleGame.exe", "denied": False}]
+    with patch("win_process_tuner.cli.list_processes", return_value=rows):
+        with patch("win_process_tuner.cli.check_target"):
+            with patch(
+                "win_process_tuner.cli.capture_game_state",
+                return_value={"pid": 321, "name": "ExampleGame.exe", "create_time": 1.0, "priority_value": psutil.HIGH_PRIORITY_CLASS},
+            ):
+                with patch("win_process_tuner.cli.write_game_snapshot") as save:
+                    with patch("win_process_tuner.cli.apply_game_priority") as set_prio:
+                        result = CliRunner().invoke(
+                            cli_mod.cli, ["game"], input="ExampleGame\n1\ny\n"
+                        )
+    assert result.exit_code == 0
+    assert "already above normal" in result.output.lower()
+    save.assert_not_called()
+    set_prio.assert_not_called()
+
+
+def test_game_keeps_undo_file_if_apply_reports_an_error():
+    rows = [{"pid": 321, "name": "ExampleGame.exe", "denied": False}]
+    saved = {
+        "pid": 321,
+        "name": "ExampleGame.exe",
+        "create_time": 1.0,
+        "priority_value": psutil.NORMAL_PRIORITY_CLASS,
+    }
+    with patch("win_process_tuner.cli.list_processes", return_value=rows):
+        with patch("win_process_tuner.cli.check_target"):
+            with patch("win_process_tuner.cli.capture_game_state", return_value=saved):
+                with patch("win_process_tuner.cli.write_game_snapshot"):
+                    with patch("win_process_tuner.cli.os.path.exists", side_effect=[False, True]):
+                        with patch("win_process_tuner.cli.apply_game_priority", side_effect=OSError("denied")):
+                            with patch("win_process_tuner.cli.remove_game_snapshot") as remove:
+                                result = CliRunner().invoke(
+                                    cli_mod.cli, ["game"], input="ExampleGame\n1\ny\n"
+                                )
+    assert result.exit_code == 1
+    assert "undo file is available" in result.output.lower()
+    remove.assert_not_called()
+
+
+def test_undo_restores_saved_game_priority():
+    with patch("win_process_tuner.cli.load_game_snapshot", return_value={"pid": 321}):
+        with patch("win_process_tuner.cli.restore_game_state", return_value={"pid": 321, "priority": {"new": 32}}) as restore:
+            with patch("win_process_tuner.cli.remove_game_snapshot") as remove:
+                result = invoke(["undo"])
+    assert result.exit_code == 0
+    assert "restored" in result.output.lower()
+    restore.assert_called_once_with({"pid": 321})
+    remove.assert_called_once()
+
+
+def test_undo_clears_snapshot_when_game_process_has_exited():
+    with patch("win_process_tuner.cli.load_game_snapshot", return_value={"pid": 321}):
+        with patch(
+            "win_process_tuner.cli.restore_game_state",
+            side_effect=psutil.NoSuchProcess(321),
+        ):
+            with patch("win_process_tuner.cli.remove_game_snapshot") as remove:
+                result = invoke(["undo"])
+    assert result.exit_code == 0
+    assert "process has exited" in result.output.lower()
+    remove.assert_called_once()
+
+
 def test_list_command():
     rows = [
         {"pid": 1, "name": "a", "cpu": 1.0, "memory": 100, "status": "running", "denied": False}
