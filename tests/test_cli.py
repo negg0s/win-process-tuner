@@ -313,6 +313,23 @@ def test_timer_dry_run():
     assert "timer behavior" in result.output
 
 
+def test_timer_query_defaults():
+    fake_info = {"min_ms": 15.625, "max_ms": 0.5, "current_ms": 1.0, "supported": True}
+    with patch("win_process_tuner.cli.query_timer_resolution", return_value=fake_info):
+        result = invoke(["timer-resolution"])
+    assert result.exit_code == 0
+    assert "Current timer resolution: 1.000 ms" in result.output
+
+
+def test_timer_query_json():
+    fake_info = {"min_ms": 15.625, "max_ms": 0.5, "current_ms": 1.0, "supported": True}
+    with patch("win_process_tuner.cli.query_timer_resolution", return_value=fake_info):
+        result = invoke(["timer-resolution", "--query", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["current_ms"] == 1.0
+
+
 def test_timer_success_reports_both_calls():
     with patch(
         "win_process_tuner.cli.apply_timer_resolution",

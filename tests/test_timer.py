@@ -94,3 +94,14 @@ def test_end_period():
         success, code = timer_mod.end_period(5)
     assert success is True
     fake_dll.timeEndPeriod.assert_called_with(5)
+
+
+def test_query_timer_resolution_supported():
+    fake_ntdll = MagicMock()
+    fake_ntdll.NtQueryTimerResolution.return_value = 0
+    with patch("ctypes.WinDLL", return_value=fake_ntdll), patch.object(timer_mod.os, "name", "nt"):
+        res = timer_mod.query_timer_resolution()
+    assert "current_ms" in res
+    assert "min_ms" in res
+    assert "max_ms" in res
+

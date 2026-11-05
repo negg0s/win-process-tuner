@@ -41,4 +41,9 @@ def run_doctor():
         checks.append(("cpu", False, str(exc)))
     # platform
     checks.append(("platform", platform.system() == "Windows", platform.platform()))
+    # timer resolution
+    from .timer import query_timer_resolution
+    t_info = query_timer_resolution()
+    detail = f"current={t_info['current_ms']}ms (min={t_info['min_ms']}ms, max={t_info['max_ms']}ms)" if t_info["supported"] else "unavailable"
+    checks.append(("timer_resolution", t_info["supported"], detail))
     return checks

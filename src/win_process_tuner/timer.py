@@ -1,6 +1,7 @@
-"""Windows timer resolution helpers using ctypes/winmm."""
+"""Windows timer resolution helpers using ctypes/winmm and ntdll."""
 
 import ctypes
+import os
 import time
 
 TIMERR_NOERROR = 0
@@ -13,6 +14,35 @@ def _winmm():
     dll.timeEndPeriod.argtypes = [ctypes.c_uint]
     dll.timeEndPeriod.restype = ctypes.c_uint
     return dll
+
+
+def query_timer_resolution():
+    """Query current system timer resolution via ntdll.NtQueryTimerResolution.
+
+    Returns dict with min_ms, max_ms, and current_ms.
+    """
+    if os.name != "nt":
+        return {"min_ms": None, "max_ms": None, "current_ms": None, "supported": False}
+    try:
+        ntdll = ctypes.WinDLL("ntdll")
+        min_res = ctypes.c_ulong()
+        max_res = ctypes.c_ulong()
+        cur_res = ctypes.c_ulong()
+        status = ntdll.NtQueryTimerResolution(
+            ctypes.byref(min_res),
+            ctypes.byref(max_res),
+            ctypes.byref(cur_res),
+        )
+        if status != 0:
+            return {"min_ms": None, "max_ms": None, "current_ms": None, "supported": False}
+        return {
+            "min_ms": round(min_res.value / 10000.0, 3),
+            "max_ms": round(max_res.value / 10000.0, 3),
+            "current_ms": round(cur_res.value / 10000.0, 3),
+            "supported": True,
+        }
+    except Exception:
+        return {"min_ms": None, "max_ms": None, "current_ms": None, "supported": False}
 
 
 def _validate_ms(ms):

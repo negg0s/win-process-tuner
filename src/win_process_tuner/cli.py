@@ -32,7 +32,7 @@ from .state import (
     write_game_snapshot,
     write_snapshot,
 )
-from .timer import apply_timer_resolution
+from .timer import apply_timer_resolution, query_timer_resolution
 
 
 def _confirm(yes, dry_run, message):
@@ -176,7 +176,7 @@ def set_affinity_cmd(pid, cpus, dry_run, yes):
 
 
 @cli.command("timer-resolution")
-@click.option("--ms", required=True, type=click.IntRange(1, 16), help="Timer resolution in ms (1-16).")
+@click.option("--ms", default=None, type=click.IntRange(1, 16), help="Timer resolution in ms (1-16).")
 @click.option(
     "--hold",
     default=0.0,
@@ -184,10 +184,26 @@ def set_affinity_cmd(pid, cpus, dry_run, yes):
     show_default=True,
     help="Seconds to hold the timer period before calling timeEndPeriod.",
 )
+@click.option("--query", is_flag=True, help="Query current system timer resolution without changing it.")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
 @click.option("--dry-run", is_flag=True, help="Print intended change without applying.")
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt.")
-def timer_resolution_cmd(ms, hold, dry_run, yes):
-    """Begin and end a Windows timer period."""
+def timer_resolution_cmd(ms, hold, query, as_json, dry_run, yes):
+    """Query or set Windows timer resolution."""
+    if query or ms is None:
+        info = query_timer_resolution()
+        if as_json:
+            _dump_json(info)
+            return
+        if not info.get("supported"):
+            click.echo("Timer resolution query not supported on this platform.", err=True)
+            sys.exit(1)
+        click.echo(
+            f"Current timer resolution: {info['current_ms']:.3f} ms "
+            f"(min: {info['min_ms']:.3f} ms, max: {info['max_ms']:.3f} ms)"
+        )
+        return
+
     click.echo(
         "Note: timeBeginPeriod changes timer behavior for this process and can "
         "affect other processes on some Windows versions.",
