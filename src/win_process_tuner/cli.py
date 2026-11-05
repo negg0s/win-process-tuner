@@ -297,9 +297,19 @@ def restore_cmd(pid, input_path, dry_run, yes):
 
 
 @cli.command("doctor")
-def doctor_cmd():
+@click.option("--json", "as_json", is_flag=True, help="Print JSON.")
+def doctor_cmd(as_json):
     """Run environment diagnostics."""
     checks = run_doctor()
+    passed = sum(1 for _, ok, _ in checks if ok)
+    if as_json:
+        payload = {
+            "checks": [{"name": name, "ok": ok, "detail": detail} for name, ok, detail in checks],
+            "passed": passed,
+            "total": len(checks),
+        }
+        click.echo(json.dumps(payload, indent=2))
+        return
     for name, ok, detail in checks:
         status = "OK" if ok else "FAIL"
         click.echo(f"{name:16} {status:5} {detail}")

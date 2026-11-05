@@ -408,3 +408,13 @@ def test_restore_invalid_snapshot_exits():
 def test_doctor_command():
     result = invoke(["doctor"])
     assert result.exit_code == 0
+
+
+def test_doctor_command_json():
+    result = invoke(["doctor", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert "checks" in payload
+    assert "passed" in payload
+    assert "total" in payload
+    assert isinstance(payload["checks"], list)
