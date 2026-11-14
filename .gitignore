@@ -12,3 +12,7 @@ htmlcov/
 .venv/
 venv/
 wpt-*.json
+# Python cache
+*.pyc
+*.pyo
+*.pyd
