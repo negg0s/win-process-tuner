@@ -162,6 +162,8 @@ def test_parse_cpu_list():
     assert proc_mod.parse_cpu_list("0,2,4") == [0, 2, 4]
     assert proc_mod.parse_cpu_list(" 1 , 3 ") == [1, 3]
     assert proc_mod.parse_cpu_list("0,0,1") == [0, 1]
+    assert proc_mod.parse_cpu_list("0-3") == [0, 1, 2, 3]
+    assert proc_mod.parse_cpu_list("0-2,4,6-7") == [0, 1, 2, 4, 6, 7]
 
 
 def test_parse_cpu_list_rejects_bad_values():
@@ -169,3 +171,7 @@ def test_parse_cpu_list_rejects_bad_values():
         proc_mod.parse_cpu_list("")
     with pytest.raises(ValueError):
         proc_mod.parse_cpu_list("0,x")
+    with pytest.raises(ValueError):
+        proc_mod.parse_cpu_list("3-1")
+    with pytest.raises(ValueError):
+        proc_mod.parse_cpu_list("-1-2")

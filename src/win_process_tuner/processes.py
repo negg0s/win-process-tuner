@@ -153,6 +153,18 @@ def parse_cpu_list(value):
         parts = list(value)
     out = []
     for part in parts:
+        if isinstance(part, str) and "-" in part:
+            bounds = [b.strip() for b in part.split("-", 1)]
+            try:
+                start, end = int(bounds[0]), int(bounds[1])
+            except (TypeError, ValueError):
+                raise ValueError(f"Invalid CPU index: {part!r}")
+            if start < 0 or end < 0 or start > end:
+                raise ValueError(f"Invalid CPU range: {part!r}")
+            for cpu in range(start, end + 1):
+                if cpu not in out:
+                    out.append(cpu)
+            continue
         try:
             cpu = int(part)
         except (TypeError, ValueError):
