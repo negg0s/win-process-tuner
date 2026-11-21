@@ -37,7 +37,7 @@ jobs:
           mv ../checksums-sha256.txt ./checksums-sha256.txt
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*
